@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { loginUser, registerUser } from '@/actions/auth';
+import { loginUser, registerUser, getPublicDivisions } from '@/actions/auth';
 import { createClient } from '@/lib/supabase/client';
 import { 
   ShieldCheck, 
@@ -60,23 +60,13 @@ export default function LoginPage() {
   React.useEffect(() => {
     async function loadDivisions() {
       try {
-        const supabase: any = createClient();
-        const { data } = await supabase.from('divisions').select('id, name').order('name');
+        const data = await getPublicDivisions();
         if (data && data.length > 0) {
           setDivisions(data);
-          setRegDivisionId(data[0].id);
-        } else {
-          // Fallback divisions
-          const fallback = [
-            { id: '11111111-1111-1111-1111-111111111111', name: 'Engineering & Technology' },
-            { id: '22222222-2222-2222-2222-222222222222', name: 'Operations & Delivery' },
-            { id: '33333333-3333-3333-3333-333333333333', name: 'Finance & Administration' },
-          ];
-          setDivisions(fallback);
-          setRegDivisionId(fallback[0].id);
+          setRegDivisionId(data[0].id); // UUID valid dari tabel divisions
         }
       } catch (err) {
-        console.warn('Failed to fetch divisions:', err);
+        console.warn('Failed to fetch divisions from database:', err);
       }
     }
     loadDivisions();
@@ -117,25 +107,37 @@ export default function LoginPage() {
     setRegSuccess(null);
     setIsRegLoading(true);
 
+    if (!regDivisionId) {
+      setRegError('Silakan pilih divisi kerja yang valid.');
+      setIsRegLoading(false);
+      return;
+    }
+
     try {
-      const result = await registerUser({
-        fullName: regFullName,
-        email: regEmail,
+      // 1. Eksekusi Supabase signUp dengan metadata data options yang terformat rapi
+      const supabase = createClient();
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: regEmail.trim(),
         password: regPassword,
-        whatsappNumber: regWhatsapp,
-        divisionId: regDivisionId,
+        options: {
+          data: {
+            full_name: regFullName.trim(),
+            whatsapp_number: regWhatsapp.trim(),
+            division_id: regDivisionId.trim(), // INI WAJIB UUID DARI DATABASE
+          },
+        },
       });
 
-      if (!result.success) {
-        setRegError(result.error || 'Pendaftaran gagal. Periksa kembali data Anda.');
+      if (authError || !authData.user) {
+        setRegError(authError?.message || 'Pendaftaran gagal. Periksa kembali data Anda.');
         setIsRegLoading(false);
         return;
       }
 
-      setRegSuccess(result.message || 'Pendaftaran berhasil!');
+      setRegSuccess('Pendaftaran berhasil! Akun Anda sedang menunggu persetujuan (ACC) dari jajaran Owner.');
       setIsRegLoading(false);
 
-      // Auto-switch to login tab with prefilled email after 2 seconds
+      // Auto-switch to login tab with prefilled email after 2.5 seconds
       setTimeout(() => {
         setLoginEmail(regEmail);
         setActiveTab('login');

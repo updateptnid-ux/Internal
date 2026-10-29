@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
@@ -16,8 +17,33 @@ const registerSchema = z.object({
   email: z.string().email('Format email tidak valid').min(1, 'Email wajib diisi'),
   password: z.string().min(6, 'Password minimal 6 karakter'),
   whatsappNumber: z.string().min(8, 'Nomor WhatsApp minimal 8 digit'),
-  divisionId: z.string().min(1, 'Divisi wajib dipilih'),
+  divisionId: z.string().uuid('ID divisi harus berformat UUID yang valid dari database'),
 });
+
+/**
+ * 0. getPublicDivisions Server Action
+ * - Mengambil daftar divisi resmi langsung dari tabel `divisions` di database
+ * - Berjalan di server environment dengan service client, aman dan selalu mengembalikan UUID asli
+ */
+export async function getPublicDivisions(): Promise<Array<{ id: string; name: string }>> {
+  try {
+    const admin = createAdminClient();
+    const { data, error } = await admin
+      .from('divisions')
+      .select('id, name')
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.error('[getPublicDivisions] Error:', error.message);
+      return [];
+    }
+
+    return (data as Array<{ id: string; name: string }>) || [];
+  } catch (err: any) {
+    console.error('[getPublicDivisions] Exception:', err.message);
+    return [];
+  }
+}
 
 /**
  * 1. loginUser Server Action
@@ -98,6 +124,7 @@ export async function loginUser(formData: { email: string; password: string }) {
 /**
  * 2. registerUser Server Action
  * - Mendaftarkan akun tim baru ke Supabase Auth
+ * - Mengirimkan metadata division_id berupa UUID valid dari tabel divisions
  * - Menyimpan profil dengan status PENDING dan role STAFF
  */
 export async function registerUser(formData: {
@@ -118,7 +145,7 @@ export async function registerUser(formData: {
 
   const supabase: any = await createClient();
 
-  // 1. SignUp ke Supabase Auth
+  // 1. SignUp ke Supabase Auth dengan metadata lengkap
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email: formData.email.trim(),
     password: formData.password,
@@ -126,7 +153,7 @@ export async function registerUser(formData: {
       data: {
         full_name: formData.fullName.trim(),
         whatsapp_number: formData.whatsappNumber.trim(),
-        division_id: formData.divisionId,
+        division_id: formData.divisionId.trim(), // INI WAJIB UUID DARI DATABASE
         role: 'STAFF',
       },
     },
@@ -140,7 +167,8 @@ export async function registerUser(formData: {
   }
 
   // 2. Pastikan record di profiles tersimpan dengan status 'PENDING'
-  const { error: profileError } = await supabase
+  const admin = createAdminClient();
+  const { error: profileError } = await admin
     .from('profiles')
     .upsert(
       {
@@ -148,7 +176,7 @@ export async function registerUser(formData: {
         full_name: formData.fullName.trim(),
         email: formData.email.trim(),
         whatsapp_number: formData.whatsappNumber.trim(),
-        division_id: formData.divisionId,
+        division_id: formData.divisionId.trim(),
         role: 'STAFF',
         account_status: 'PENDING',
       },
@@ -156,7 +184,7 @@ export async function registerUser(formData: {
     );
 
   if (profileError) {
-    console.warn('[RegisterEngine] Profile upsert warning:', profileError.message);
+    console.warn('[RegisterEngine] Profile upsert notice:', profileError.message);
   }
 
   return {
@@ -172,60 +200,63 @@ export async function registerUser(formData: {
  */
 export async function approveUserAccount(
   userId: string,
-  assignedRole: 'STAFF' | 'MANAGER' = 'STAFF',
-  decision: 'ACTIVE' | 'REJECTED' = 'ACTIVE'
+  assignedRole: 'STAFF' | 'MANAGER',
+  decision: 'ACTIVE' | 'REJECTED'
 ) {
   const supabase: any = await createClient();
 
-  // 1. Verifikasi Sesi Actor
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) {
-    throw new Error('Unauthorized: Otentikasi diperlukan.');
+  // 1. Verifikasi bahwa eksekutor adalah OWNER
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) {
+    return { success: false, error: 'Sesi kedaluwarsa. Silakan login kembali.' };
   }
 
-  // 2. Verifikasi Role Owner
-  const { data: actorProfile, error: profileError } = await supabase
+  const { data: executorProfile } = await supabase
     .from('profiles')
     .select('role')
     .eq('id', user.id)
     .single();
 
-  if (profileError || actorProfile?.role !== 'OWNER') {
-    throw new Error('Forbidden: Hanya jajaran Owner yang berhak menyetujui akun anggota tim baru.');
+  if (executorProfile?.role !== 'OWNER') {
+    return {
+      success: false,
+      error: 'Hanya jajaran Owner yang berhak menyetujui akun pendaftaran tim baru.',
+    };
   }
 
-  // 3. Mutasi status akun & role
-  const { data: updatedProfile, error: updateError } = await supabase
+  // 2. Mutasi account_status dan role
+  const { error: updateError } = await supabase
     .from('profiles')
     .update({
       account_status: decision,
       role: decision === 'ACTIVE' ? assignedRole : 'STAFF',
+      updated_at: new Date().toISOString(),
     })
-    .eq('id', userId)
-    .select()
-    .single();
+    .eq('id', userId);
 
-  if (updateError || !updatedProfile) {
-    throw new Error(`Gagal memperbarui status akun: ${updateError?.message}`);
+  if (updateError) {
+    return {
+      success: false,
+      error: updateError.message || 'Gagal memperbarui status akun.',
+    };
   }
 
   revalidatePath('/dashboard/owner');
-  revalidatePath('/dashboard/tasks');
 
   return {
     success: true,
     message: decision === 'ACTIVE'
-      ? `Akun ${updatedProfile.full_name} berhasil di-ACC dengan role ${assignedRole}.`
-      : `Pendaftaran ${updatedProfile.full_name} telah ditolak.`,
+      ? `Akun berhasil disetujui (ACC) dengan role ${assignedRole}.`
+      : 'Pendaftaran akun telah ditolak.',
   };
 }
 
 /**
  * 4. logoutUser Server Action
+ * - Mengakhiri sesi pengguna
  */
 export async function logoutUser() {
   const supabase: any = await createClient();
   await supabase.auth.signOut();
-  revalidatePath('/', 'layout');
   redirect('/login');
 }
