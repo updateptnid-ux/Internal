@@ -150,7 +150,7 @@ export default async function OwnerDashboardPage() {
   }));
 
   return (
-    <div className="p-6 md:p-8 font-sans">
+    <div className="p-4 sm:p-6 md:p-8 font-sans">
       <div className="max-w-6xl mx-auto">
         <GodEyeAnalytics
           totalActiveTasks={activeTasks.length}
