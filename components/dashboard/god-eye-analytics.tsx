@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { TaskPriority, TaskCategory, PriorityIndonesia } from '@/types/database';
 import { AnalyticsCharts, DivisionPerformance, KpiPerformance } from './analytics-charts';
+import { PendingApprovals } from './pending-approvals';
 import {
   CORE_TEAM_MEMBERS,
   PTN_DIVISIONS,
@@ -123,6 +124,7 @@ export function GodEyeAnalytics({
   divisionPerformanceData,
   kpiPerformanceData,
   highPriorityTasks,
+  pendingUsers,
 }: GodEyeAnalyticsProps) {
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -630,6 +632,11 @@ export function GodEyeAnalytics({
             })}
           </CardContent>
         </Card>
+      </motion.div>
+
+      {/* 4. PERSETUJUAN ANGGOTA BARU (ACC PENDAFTARAN) */}
+      <motion.div variants={itemVariants}>
+        <PendingApprovals initialPendingUsers={pendingUsers} />
       </motion.div>
 
       {/* 5. MODAL DELEGASI TUGAS BARU (MENDUKUNG 9 DIVISI, KATEGORI MARKETING & PRIORITAS INDONESIA) */}

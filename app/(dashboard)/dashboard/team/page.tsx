@@ -1,15 +1,42 @@
 import { Suspense } from 'react';
+import { createClient } from '@/lib/supabase/server';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { DirectWAButton } from '@/components/ui/direct-wa-button';
-import { Users, Building2, Phone, Shield, Layers } from 'lucide-react';
+import { Users, Building2, Phone, Shield, Layers, UserPlus } from 'lucide-react';
 import DashboardLoading from '@/app/(dashboard)/loading';
 import { CORE_TEAM_MEMBERS, PTN_DIVISIONS } from '@/lib/operational-data';
+import { PendingApprovals, PendingApplicant } from '@/components/dashboard/pending-approvals';
 
 export const dynamic = 'force-dynamic';
 
 export default async function TeamPage() {
+  let pendingUsers: PendingApplicant[] = [];
+
+  try {
+    const supabase: any = await createClient();
+    const { data } = await supabase
+      .from('profiles')
+      .select(`
+        id,
+        full_name,
+        email,
+        whatsapp_number,
+        created_at,
+        division_id,
+        division:divisions(name)
+      `)
+      .eq('account_status', 'PENDING')
+      .order('created_at', { ascending: false });
+
+    if (data && data.length > 0) {
+      pendingUsers = data;
+    }
+  } catch {
+    // Gunakan fallback data jika belum terkoneksi database
+  }
+
   return (
     <Suspense fallback={<DashboardLoading />}>
       <div className="p-4 sm:p-6 md:p-8 space-y-6 max-w-7xl mx-auto font-sans">
@@ -25,7 +52,7 @@ export default async function TeamPage() {
               Tim Inti & 9 Divisi Operasional PTN
             </h1>
             <p className="text-sm text-slate-500 mt-1">
-              Pemetaan peran ganda (multi-job) 5 personel inti beserta 9 departemen operasional EdTech.
+              Pemetaan peran ganda (multi-job) 5 personel inti, persetujuan anggota baru (ACC), dan 9 departemen operasional EdTech.
             </p>
           </div>
         </div>
@@ -74,7 +101,14 @@ export default async function TeamPage() {
           </Card>
         </div>
 
-        {/* 5 ANGGOTA TIM INTI (PERAN GANDA) */}
+        {/* SECTION 1: PERSETUJUAN ANGGOTA BARU (ACC PENDAFTARAN) */}
+        <PendingApprovals
+          initialPendingUsers={pendingUsers}
+          title="Verifikasi & Persetujuan Anggota Baru (ACC Pendaftaran)"
+          description="Pendaftar baru yang menunggu persetujuan (ACC) Owner sebelum diberikan hak akses ke portal kerja."
+        />
+
+        {/* SECTION 2: 5 ANGGOTA TIM INTI (PERAN GANDA) */}
         <Card className="border border-slate-200/70 bg-white shadow-xs rounded-2xl overflow-hidden">
           <CardHeader className="pb-3 border-b border-slate-100">
             <CardTitle className="text-sm font-bold text-slate-900">
@@ -150,7 +184,7 @@ export default async function TeamPage() {
           </CardContent>
         </Card>
 
-        {/* 9 DIVISI OPERASIONAL GRID */}
+        {/* SECTION 3: 9 DIVISI OPERASIONAL GRID */}
         <div className="space-y-3">
           <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
             <Layers className="w-4 h-4 text-indigo-600" />

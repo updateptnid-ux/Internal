@@ -242,6 +242,7 @@ export async function approveUserAccount(
   }
 
   revalidatePath('/dashboard/owner');
+  revalidatePath('/dashboard/team');
 
   return {
     success: true,
