@@ -246,3 +246,4 @@ function AnalyticsChartsSkeleton() {
     </div>
   );
 }
+
