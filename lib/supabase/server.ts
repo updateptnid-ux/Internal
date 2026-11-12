@@ -11,7 +11,7 @@ export async function createClient() {
   const cookieStore = cookies();
   const { NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY } = getEnv();
 
-  return createServerClient<Database>(
+  return createServerClient(
     NEXT_PUBLIC_SUPABASE_URL,
     NEXT_PUBLIC_SUPABASE_ANON_KEY,
     {

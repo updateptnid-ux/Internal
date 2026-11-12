@@ -1,368 +1,267 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Task, TaskActivity, TaskStatus } from '@/types/database';
-import { updateTaskProgress } from '@/actions/tasks';
-import { createClient } from '@/lib/supabase/client';
-import { DirectWAButton } from '@/components/ui/direct-wa-button';
-import { Progress } from '@/components/ui/progress';
-import { Badge } from '@/components/ui/badge';
-import { 
-  X, 
-  Calendar, 
-  Clock, 
-  User, 
-  Building2, 
-  History, 
-  Send, 
-  ArrowRight,
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+  X,
+  Calendar,
+  Clock,
+  User,
+  AlertCircle,
+  CheckCircle2,
+  Bell,
+  Trash2,
+  MessageCircle,
+  Loader2,
   ShieldAlert,
-  CheckCircle,
-  FileText
 } from 'lucide-react';
+import type { CalendarTask, Profile, TaskStatus } from '@/types/database';
+import { updateCalendarTaskStatus, sendTaskPing, deleteCalendarTask } from '@/actions/tasks';
+import { firstName, isOverdue } from '@/lib/performance';
 
 interface TaskDetailModalProps {
-  task: Task | null;
+  task: CalendarTask | null;
   isOpen: boolean;
   onClose: () => void;
-  onTaskMutated?: (updatedTask: Partial<Task> & { id: string }) => void;
+  profiles: Profile[];
+  currentUserId: string;
+  onTaskUpdated?: (updated: CalendarTask) => void;
+  onTaskDeleted?: (taskId: string) => void;
+  onNotify?: (msg: string, opts?: { tone?: 'default' | 'error'; action?: { label: string; href: string } }) => void;
 }
 
-export function TaskDetailModal({ task, isOpen, onClose, onTaskMutated }: TaskDetailModalProps) {
-  const [activities, setActivities] = useState<TaskActivity[]>([]);
-  const [isLoadingActivities, setIsLoadingActivities] = useState(false);
-  const [commentText, setCommentText] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [currentProgress, setCurrentProgress] = useState(task?.progress_percentage ?? 0);
-  const [currentStatus, setCurrentStatus] = useState<TaskStatus>(task?.status ?? 'TODO');
-
-  const supabase = createClient();
-
-  useEffect(() => {
-    if (task && isOpen) {
-      setCurrentProgress(task.progress_percentage);
-      setCurrentStatus(task.status);
-      fetchActivities(task.id);
-    }
-  }, [task, isOpen]);
-
-  const fetchActivities = async (taskId: string) => {
-    setIsLoadingActivities(true);
-    try {
-      const { data, error } = await supabase
-        .from('task_activities')
-        .select(`
-          *,
-          user:profiles!task_activities_user_id_fkey(full_name, role)
-        `)
-        .eq('task_id', taskId)
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Error fetching audit trail:', error);
-      } else {
-        setActivities((data as any) || []);
-      }
-    } catch (err) {
-      console.error('Failed to load audit trail:', err);
-    } finally {
-      setIsLoadingActivities(false);
-    }
-  };
+export function TaskDetailModal({
+  task,
+  isOpen,
+  onClose,
+  profiles,
+  currentUserId,
+  onTaskUpdated,
+  onTaskDeleted,
+  onNotify,
+}: TaskDetailModalProps) {
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isPinging, setIsPinging] = useState(false);
 
   if (!isOpen || !task) return null;
 
-  const handleUpdateStatus = async (newStatus: TaskStatus) => {
-    setCurrentStatus(newStatus);
-    const targetProgress = newStatus === 'DONE' ? 100 : currentProgress;
-    if (newStatus === 'DONE') setCurrentProgress(100);
+  const assignee = profiles.find((p) => p.id === task.assignee_id);
+  const overdue = isOverdue(task);
+  const isDone = task.status === 'COMPLETED';
+  const canPing = !isDone && !!task.assignee_id && task.assignee_id !== currentUserId;
 
-    setIsSubmitting(true);
-    try {
-      await updateTaskProgress({
-        taskId: task.id,
-        status: newStatus,
-        progressPercentage: targetProgress,
-        auditComment: `Status updated to ${newStatus} from Task Detail View.`,
-      });
+  async function handleStatusChange(newStatus: TaskStatus) {
+    if (!task) return;
+    setIsUpdating(true);
+    const res = await updateCalendarTaskStatus(task.id, newStatus);
+    setIsUpdating(false);
+    if (res.success) {
+      if (onTaskUpdated) onTaskUpdated(res.data);
+      if (onNotify) onNotify(`Status tugas diubah menjadi ${newStatus}.`);
+    } else {
+      if (onNotify) onNotify(res.error, { tone: 'error' });
+    }
+  }
 
-      if (onTaskMutated) {
-        onTaskMutated({ id: task.id, status: newStatus, progress_percentage: targetProgress });
+  async function handlePing() {
+    if (!task) return;
+    setIsPinging(true);
+    const res = await sendTaskPing(task.id);
+    setIsPinging(false);
+    if (res.success) {
+      if (onTaskUpdated) onTaskUpdated(res.data.task);
+      const name = assignee ? firstName(assignee.full_name) : 'penanggung jawab';
+      if (onNotify) {
+        onNotify(`Pengingat berhasil dikirim ke ${name}.`, {
+          action: res.data.whatsappUrl
+            ? { label: 'Kirim via WhatsApp', href: res.data.whatsappUrl }
+            : undefined,
+        });
       }
-      await fetchActivities(task.id);
-    } catch (err) {
-      console.error('Failed to update status:', err);
-      // Revert state
-      setCurrentStatus(task.status);
-    } finally {
-      setIsSubmitting(false);
+    } else {
+      if (onNotify) onNotify(res.error, { tone: 'error' });
     }
-  };
+  }
 
-  const handleUpdateProgress = async (progressVal: number) => {
-    setCurrentProgress(progressVal);
-    try {
-      await updateTaskProgress({
-        taskId: task.id,
-        progressPercentage: progressVal,
-      });
-
-      if (onTaskMutated) {
-        onTaskMutated({ id: task.id, progress_percentage: progressVal });
-      }
-      await fetchActivities(task.id);
-    } catch (err) {
-      console.error('Failed to update progress:', err);
+  async function handleDelete() {
+    if (!task) return;
+    if (!confirm(`Hapus tugas "${task.title}"?`)) return;
+    const res = await deleteCalendarTask(task.id);
+    if (res.success) {
+      if (onTaskDeleted) onTaskDeleted(task.id);
+      if (onNotify) onNotify('Tugas berhasil dihapus.');
+      onClose();
+    } else {
+      if (onNotify) onNotify(res.error, { tone: 'error' });
     }
-  };
-
-  const handleAddComment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!commentText.trim()) return;
-
-    setIsSubmitting(true);
-    try {
-      await updateTaskProgress({
-        taskId: task.id,
-        auditComment: commentText.trim(),
-      });
-      setCommentText('');
-      await fetchActivities(task.id);
-    } catch (err) {
-      console.error('Failed to post audit comment:', err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+  }
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 md:p-6 animate-in fade-in duration-150">
-      <div className="bg-white border border-slate-200/90 rounded-xl max-w-4xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
-        
-        {/* Modal Top Bar */}
-        <div className="px-6 py-3.5 border-b border-slate-200 flex items-center justify-between bg-slate-50/80">
-          <div className="flex items-center gap-2.5">
-            <span className="font-mono text-xs text-slate-400">TASK-{task.id.slice(0, 8).toUpperCase()}</span>
-            <span className="text-slate-300">/</span>
-            <span className="text-xs font-semibold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded">
-              {task.division?.name || 'General Division'}
-            </span>
-          </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-md transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        {/* Modal Content - Dual Column Grid */}
-        <div className="grid grid-cols-1 md:grid-cols-12 flex-1 overflow-y-auto divide-y md:divide-y-0 md:divide-x divide-slate-200">
-          
-          {/* Left Column: Task Core Specifications (7 Cols) */}
-          <div className="md:col-span-7 p-6 space-y-6">
-            <div>
-              <h2 className="text-xl font-bold text-slate-900 tracking-tight leading-snug">
-                {task.title}
-              </h2>
-
-              {/* Status and Priority Meta Controls */}
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <select
-                  value={currentStatus}
-                  onChange={(e: React.ChangeEvent<HTMLSelectElement>) => handleUpdateStatus(e.target.value as TaskStatus)}
-                  disabled={isSubmitting}
-                  className="text-xs font-semibold bg-white border border-slate-300 rounded-md px-2.5 py-1 text-slate-800 focus:outline-none focus:ring-1 focus:ring-slate-900"
-                >
-                  <option value="BACKLOG">BACKLOG</option>
-                  <option value="TODO">TO DO</option>
-                  <option value="IN_PROGRESS">IN PROGRESS</option>
-                  <option value="IN_REVIEW">IN REVIEW</option>
-                  <option value="DONE">DONE (ACC)</option>
-                  <option value="REJECTED">REJECTED (Revisi)</option>
-                </select>
-
-                <Badge variant={task.priority === 'URGENT' ? 'urgent' : task.priority === 'HIGH' ? 'high' : 'medium'}>
-                  {task.priority} PRIORITY
-                </Badge>
-
-                {task.due_date && (
-                  <span className="inline-flex items-center gap-1 text-xs text-slate-500 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-md">
-                    <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                    Due: {new Date(task.due_date).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
-                  </span>
-                )}
-              </div>
-            </div>
-
-            {/* Description */}
-            <div>
-              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
-                <FileText className="w-3.5 h-3.5 text-slate-400" />
-                <span>Scope of Work & Specification</span>
-              </div>
-              <div className="text-xs text-slate-700 leading-relaxed bg-slate-50/60 p-4 rounded-lg border border-slate-200/80 whitespace-pre-wrap min-h-[100px]">
-                {task.description || 'No detailed description provided for this task.'}
-              </div>
-            </div>
-
-            {/* Milestone Progress Slider */}
-            <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-4">
-              <div className="flex items-center justify-between text-xs font-semibold text-slate-700 mb-2">
-                <span>Progress Tracking</span>
-                <span className="font-mono text-xs font-bold text-slate-900 bg-white border border-slate-200 px-2 py-0.5 rounded">
-                  {currentProgress}%
+    <AnimatePresence>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.96, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.96, y: 10 }}
+          transition={{ duration: 0.2 }}
+          className="bg-white rounded-xl border border-[#E5E5E5] w-full max-w-lg shadow-xl overflow-hidden font-sans"
+        >
+          {/* Header */}
+          <div className="px-6 py-4 border-b border-[#F0F0F0] flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span
+                className={`text-[10px] uppercase font-semibold px-2 py-0.5 rounded ${
+                  task.priority === 'HIGH'
+                    ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                    : task.priority === 'MEDIUM'
+                      ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                      : 'bg-[#FAFAFA] text-[#737373] border border-[#E5E5E5]'
+                }`}
+              >
+                Prioritas {task.priority}
+              </span>
+              {overdue && (
+                <span className="text-[10px] font-medium bg-amber-50 text-amber-800 border border-amber-200 px-2 py-0.5 rounded flex items-center gap-1">
+                  <ShieldAlert className="w-3 h-3 text-amber-600" />
+                  Lewat Tenggat
                 </span>
-              </div>
-              <input
-                type="range"
-                min="0"
-                max="100"
-                step="5"
-                value={currentProgress}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleUpdateProgress(Number(e.target.value))}
-                className="w-full h-2 bg-slate-200 rounded-lg accent-slate-900 cursor-pointer"
-              />
-              <div className="flex justify-between text-[10px] text-slate-400 font-mono mt-1.5">
-                <span>0% (Not Started)</span>
-                <span>50% (Active)</span>
-                <span>100% (Completed)</span>
-              </div>
-            </div>
-
-            {/* Assignee Contact Card */}
-            <div className="border border-slate-200 rounded-lg p-4">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 block mb-3">
-                Assigned Staff Member
-              </span>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-slate-900 text-white flex items-center justify-center font-bold text-xs">
-                    {task.assignee?.full_name?.charAt(0) || <User className="w-4 h-4" />}
-                  </div>
-                  <div>
-                    <h5 className="text-xs font-bold text-slate-900">{task.assignee?.full_name}</h5>
-                    <p className="text-[11px] text-slate-500">{task.assignee?.email}</p>
-                  </div>
-                </div>
-
-                {task.assignee?.whatsapp_number && (
-                  <DirectWAButton
-                    phone={task.assignee.whatsapp_number}
-                    recipientName={task.assignee.full_name}
-                    taskTitle={task.title}
-                    taskId={task.id}
-                    status={currentStatus}
-                    progress={currentProgress}
-                    variant="badge"
-                  />
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column: Audit Trail Timeline (5 Cols) */}
-          <div className="md:col-span-5 p-6 flex flex-col bg-slate-50/40">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-              <div className="flex items-center gap-2">
-                <History className="w-4 h-4 text-slate-700" />
-                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                  Audit Trail Timeline
-                </h3>
-              </div>
-              <span className="text-[10px] font-mono font-medium text-slate-500 bg-white border border-slate-200 px-2 py-0.5 rounded">
-                Immutable Log
-              </span>
-            </div>
-
-            {/* Timeline Events Stream */}
-            <div className="mt-4 flex-1 overflow-y-auto space-y-4 pr-1 max-h-[380px]">
-              {isLoadingActivities ? (
-                <div className="py-12 text-center text-xs text-slate-400">Loading audit records...</div>
-              ) : activities.length === 0 ? (
-                <div className="py-12 text-center text-xs text-slate-400 italic">
-                  No audit log entries recorded yet.
-                </div>
-              ) : (
-                activities.map((act: any) => (
-                  <div key={act.id} className="relative pl-5 pb-2 border-l-2 border-slate-200 last:border-transparent">
-                    {/* Timeline Node Dot */}
-                    <div className="absolute -left-[5px] top-1 w-2 h-2 rounded-full bg-slate-700 ring-2 ring-white" />
-                    
-                    {/* Timestamp & User */}
-                    <div className="flex items-baseline justify-between gap-1">
-                      <span className="text-xs font-bold text-slate-900">
-                        {act.user?.full_name || 'System / Service'}
-                      </span>
-                      <span className="text-[10px] font-mono text-slate-400">
-                        {new Date(act.created_at).toLocaleString('id-ID', {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </span>
-                    </div>
-
-                    {/* Action Diff Display */}
-                    {act.action_type === 'STATUS_CHANGE' && (
-                      <p className="text-[11px] text-slate-600 mt-1">
-                        Status modified: <span className="line-through text-slate-400 font-mono">{act.old_value}</span>{' '}
-                        ➔ <span className="font-semibold text-slate-900 font-mono">{act.new_value}</span>
-                      </p>
-                    )}
-
-                    {act.action_type === 'PROGRESS_UPDATE' && (
-                      <p className="text-[11px] text-slate-600 mt-1">
-                        Progress milestone: <span className="line-through text-slate-400 font-mono">{act.old_value}</span>{' '}
-                        ➔ <span className="font-bold text-slate-900 font-mono">{act.new_value}</span>
-                      </p>
-                    )}
-
-                    {act.action_type === 'REASSIGN' && (
-                      <p className="text-[11px] text-slate-600 mt-1">
-                        Reassigned: <span className="text-slate-500">{act.old_value}</span> ➔{' '}
-                        <strong className="text-slate-900">{act.new_value}</strong>
-                      </p>
-                    )}
-
-                    {act.comment_text && (
-                      <div className="mt-1.5 bg-white border border-slate-200 p-2.5 rounded text-xs text-slate-800 leading-normal shadow-2xs">
-                        {act.comment_text}
-                      </div>
-                    )}
-                  </div>
-                ))
               )}
             </div>
 
-            {/* Audit Log / Comment Input */}
-            <form onSubmit={handleAddComment} className="mt-4 pt-3 border-t border-slate-200">
-              <label className="text-[11px] font-semibold text-slate-600 block mb-1.5">
-                Add Executive Note / Audit Log
-              </label>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Record note in permanent audit trail..."
-                  value={commentText}
-                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => setCommentText(e.target.value)}
-                  className="flex-1 text-xs border border-slate-300 rounded px-3 py-2 bg-white focus:outline-none focus:ring-1 focus:ring-slate-900"
-                  disabled={isSubmitting}
-                />
-                <button
-                  type="submit"
-                  disabled={isSubmitting || !commentText.trim()}
-                  className="p-2 bg-slate-900 text-white rounded hover:bg-slate-800 disabled:opacity-50 transition-colors"
-                >
-                  <Send className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </form>
+            <button
+              onClick={onClose}
+              className="p-1 text-[#737373] hover:text-[#171717] rounded-md transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
 
-        </div>
+          {/* Content */}
+          <div className="p-6 space-y-5">
+            <div>
+              <h2 className="text-base font-semibold text-[#171717] leading-snug">
+                {task.title}
+              </h2>
+              {task.description ? (
+                <p className="text-xs text-[#737373] mt-2 leading-relaxed whitespace-pre-wrap bg-[#FAFAFA] p-3 rounded-lg border border-[#F0F0F0]">
+                  {task.description}
+                </p>
+              ) : (
+                <p className="text-xs text-[#A3A3A3] italic mt-1">Tidak ada deskripsi tambahan.</p>
+              )}
+            </div>
+
+            {/* Timing & Dates */}
+            <div className="grid grid-cols-2 gap-3 text-xs bg-[#FAFAFA] p-3 rounded-lg border border-[#F0F0F0]">
+              <div className="flex items-start gap-2">
+                <Calendar className="w-3.5 h-3.5 text-[#737373] mt-0.5 shrink-0" />
+                <div>
+                  <span className="text-[10px] text-[#A3A3A3] uppercase block">Waktu Mulai</span>
+                  <span className="font-medium text-[#171717]">
+                    {new Date(task.start_time).toLocaleString('id-ID', {
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-start gap-2">
+                <Clock className="w-3.5 h-3.5 text-[#737373] mt-0.5 shrink-0" />
+                <div>
+                  <span className="text-[10px] text-[#A3A3A3] uppercase block">Tenggat Waktu</span>
+                  <span className={`font-medium ${overdue ? 'text-rose-600 font-semibold' : 'text-[#171717]'}`}>
+                    {new Date(task.due_date).toLocaleString('id-ID', {
+                      day: 'numeric',
+                      month: 'short',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Assignee Card */}
+            <div className="border border-[#E5E5E5] rounded-lg p-3 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-[#171717] text-white flex items-center justify-center text-xs font-semibold">
+                  {assignee ? assignee.full_name.charAt(0) : '?'}
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[#171717]">
+                    {assignee ? assignee.full_name : 'Belum Ditugaskan'}
+                  </p>
+                  <p className="text-[10px] text-[#737373]">
+                    {assignee?.title || (assignee?.role === 'OWNER' ? 'Owner' : 'Tim')}
+                  </p>
+                </div>
+              </div>
+
+              {canPing && (
+                <button
+                  onClick={handlePing}
+                  disabled={isPinging}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#171717] bg-[#FAFAFA] border border-[#E5E5E5] rounded-md hover:bg-[#F0F0F0] transition-colors"
+                >
+                  {isPinging ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    <Bell className="w-3 h-3" />
+                  )}
+                  <span>Ingatkan ({task.ping_count})</span>
+                </button>
+              )}
+            </div>
+
+            {/* Status Selector */}
+            <div>
+              <label className="block text-xs font-medium text-[#737373] mb-2 uppercase tracking-wider text-[10px]">
+                Status Pengerjaan:
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {(['TODO', 'IN_PROGRESS', 'COMPLETED'] as TaskStatus[]).map((st) => {
+                  const isActive = task.status === st;
+                  return (
+                    <button
+                      key={st}
+                      type="button"
+                      disabled={isUpdating}
+                      onClick={() => handleStatusChange(st)}
+                      className={`py-2 px-3 rounded-md text-xs font-medium border text-center transition-all ${
+                        isActive
+                          ? 'border-[#171717] bg-[#171717] text-white shadow-xs'
+                          : 'border-[#E5E5E5] bg-white text-[#737373] hover:text-[#171717] hover:bg-[#FAFAFA]'
+                      }`}
+                    >
+                      {st === 'TODO' ? 'Belum Dimulai' : st === 'IN_PROGRESS' ? 'Sedang Dikerjakan' : 'Selesai'}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Footer Actions */}
+          <div className="px-6 py-3.5 bg-[#FAFAFA] border-t border-[#F0F0F0] flex items-center justify-between">
+            <button
+              onClick={handleDelete}
+              className="text-xs text-rose-600 hover:text-rose-800 flex items-center gap-1 transition-colors"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Hapus Tugas</span>
+            </button>
+
+            <button
+              onClick={onClose}
+              className="px-4 py-1.5 text-xs font-medium bg-white border border-[#E5E5E5] text-[#171717] rounded-md hover:bg-[#F0F0F0] transition-colors"
+            >
+              Tutup
+            </button>
+          </div>
+        </motion.div>
       </div>
-    </div>
+    </AnimatePresence>
   );
 }

@@ -5,259 +5,169 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
-import { UserRole, AccountStatus } from '@/types/database';
 
 const loginSchema = z.object({
-  email: z.string().email('Format email tidak valid').min(1, 'Email wajib diisi'),
+  email: z.string().trim().email('Format email tidak valid'),
   password: z.string().min(6, 'Password minimal 6 karakter'),
 });
 
 const registerSchema = z.object({
-  fullName: z.string().min(2, 'Nama lengkap minimal 2 karakter').max(150),
-  email: z.string().email('Format email tidak valid').min(1, 'Email wajib diisi'),
+  fullName: z.string().trim().min(2, 'Nama minimal 2 karakter').max(150),
+  email: z.string().trim().email('Format email tidak valid'),
   password: z.string().min(6, 'Password minimal 6 karakter'),
-  whatsappNumber: z.string().min(8, 'Nomor WhatsApp minimal 8 digit'),
-  divisionId: z.string().uuid('ID divisi harus berformat UUID yang valid dari database'),
+  whatsappNumber: z.string().trim().min(8, 'Nomor WhatsApp minimal 8 digit'),
+  title: z.string().trim().max(150).optional(),
 });
 
-/**
- * 0. getPublicDivisions Server Action
- * - Mengambil daftar divisi resmi langsung dari tabel `divisions` di database
- * - Berjalan di server environment dengan service client, aman dan selalu mengembalikan UUID asli
- */
-export async function getPublicDivisions(): Promise<Array<{ id: string; name: string }>> {
-  try {
-    const admin = createAdminClient();
-    const { data, error } = await admin
-      .from('divisions')
-      .select('id, name')
-      .order('name', { ascending: true });
+const inviteSchema = z.object({
+  fullName: z.string().trim().min(2, 'Nama minimal 2 karakter').max(150),
+  email: z.string().trim().email('Format email tidak valid'),
+  whatsappNumber: z.string().trim().min(8, 'Nomor WhatsApp minimal 8 digit'),
+  title: z.string().trim().min(2, 'Jabatan wajib diisi'),
+  role: z.enum(['OWNER', 'TEAM']).default('TEAM'),
+  password: z.string().min(6, 'Password minimal 6 karakter').optional(),
+});
 
-    if (error) {
-      console.error('[getPublicDivisions] Error:', error.message);
-      return [];
-    }
+export type AuthResult =
+  | { success: true; redirectUrl: string; error?: never }
+  | { success: false; error: string; redirectUrl?: never };
 
-    return (data as Array<{ id: string; name: string }>) || [];
-  } catch (err: any) {
-    console.error('[getPublicDivisions] Exception:', err.message);
-    return [];
+export type InviteResult =
+  | { success: true; tempPassword: string; error?: never }
+  | { success: false; error: string; tempPassword?: never };
+
+export async function loginUser(input: { email: string; password: string }): Promise<AuthResult> {
+  const parsed = loginSchema.safeParse(input);
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? 'Input tidak valid' };
   }
-}
 
-/**
- * 1. loginUser Server Action
- * - Memverifikasi kredensial via Supabase Auth
- * - Memeriksa account_status pada tabel profiles
- * - Jika PENDING -> Arahkan ke /pending-approval
- * - Jika REJECTED -> Tolak sesi dan sign out
- * - Jika ACTIVE -> Arahkan ke /dashboard/tasks
- */
-export async function loginUser(formData: { email: string; password: string }) {
-  const parseResult = loginSchema.safeParse(formData);
+  const supabase = await createClient();
+  const { error } = await supabase.auth.signInWithPassword(parsed.data);
 
-  if (!parseResult.success) {
+  if (error) {
     return {
       success: false,
-      error: parseResult.error.issues[0]?.message || 'Input tidak valid',
-    };
-  }
-
-  const supabase: any = await createClient();
-
-  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-    email: formData.email.trim(),
-    password: formData.password,
-  });
-
-  if (authError || !authData.user) {
-    return {
-      success: false,
-      error: authError?.message === 'Invalid login credentials'
-        ? 'Email atau password yang Anda masukkan salah.'
-        : authError?.message || 'Gagal melakukan autentikasi.',
-    };
-  }
-
-  // Periksa profil dan account_status
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('id, full_name, role, account_status')
-    .eq('id', authData.user.id)
-    .single();
-
-  if (profileError || !profile) {
-    return {
-      success: true,
-      pendingApproval: true,
-      redirectUrl: '/pending-approval',
-    };
-  }
-
-  // Jika akun masih dalam status PENDING
-  if (profile.account_status === 'PENDING') {
-    return {
-      success: true,
-      pendingApproval: true,
-      redirectUrl: '/pending-approval',
-    };
-  }
-
-  // Jika akun DITOLAK
-  if (profile.account_status === 'REJECTED') {
-    await supabase.auth.signOut();
-    return {
-      success: false,
-      error: 'Pendaftaran akun Anda ditolak oleh jajaran Owner.',
+      error: error.message === 'Invalid login credentials' ? 'Email atau password salah.' : error.message,
     };
   }
 
   revalidatePath('/', 'layout');
-
-  return {
-    success: true,
-    pendingApproval: false,
-    redirectUrl: profile.role === 'OWNER' ? '/dashboard/owner' : '/dashboard/tasks',
-  };
+  return { success: true, redirectUrl: '/dashboard' };
 }
 
 /**
- * 2. registerUser Server Action
- * - Mendaftarkan akun tim baru ke Supabase Auth
- * - Mengirimkan metadata division_id berupa UUID valid dari tabel divisions
- * - Menyimpan profil dengan status PENDING dan role STAFF
+ * Register frictionless: user dibuat via Admin API dengan email_confirm: true,
+ * profil dibuat otomatis oleh trigger database, lalu langsung login.
  */
-export async function registerUser(formData: {
+export async function registerUser(input: {
   fullName: string;
   email: string;
   password: string;
   whatsappNumber: string;
-  divisionId: string;
-}) {
-  const parseResult = registerSchema.safeParse(formData);
+  title?: string;
+}): Promise<AuthResult> {
+  const parsed = registerSchema.safeParse(input);
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? 'Input tidak valid' };
+  }
+  const { fullName, email, password, whatsappNumber, title } = parsed.data;
 
-  if (!parseResult.success) {
-    return {
-      success: false,
-      error: parseResult.error.issues[0]?.message || 'Input form pendaftaran tidak valid.',
-    };
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return { success: false, error: 'SUPABASE_SERVICE_ROLE_KEY belum diset di server.' };
   }
 
-  const supabase: any = await createClient();
-
-  // 1. SignUp ke Supabase Auth dengan metadata lengkap
-  const { data: authData, error: authError } = await supabase.auth.signUp({
-    email: formData.email.trim(),
-    password: formData.password,
-    options: {
-      data: {
-        full_name: formData.fullName.trim(),
-        whatsapp_number: formData.whatsappNumber.trim(),
-        division_id: formData.divisionId.trim(), // INI WAJIB UUID DARI DATABASE
-        role: 'STAFF',
-      },
-    },
+  const admin = createAdminClient();
+  const { data: created, error: createError } = await admin.auth.admin.createUser({
+    email,
+    password,
+    email_confirm: true,
+    user_metadata: { full_name: fullName, whatsapp_number: whatsappNumber, title: title || null, role: 'OWNER' },
   });
 
-  if (authError || !authData.user) {
+  if (createError || !created.user) {
+    const msg = createError?.message ?? 'Pendaftaran gagal.';
     return {
       success: false,
-      error: authError?.message || 'Gagal mendaftarkan akun.',
+      error: /already|registered|exists/i.test(msg) ? 'Email sudah terdaftar. Silakan masuk.' : msg,
     };
   }
 
-  // 2. Pastikan record di profiles tersimpan dengan status 'PENDING'
+  // Pastikan data profil sinkron di tabel profiles
+  await admin.from('profiles').upsert(
+    {
+      id: created.user.id,
+      full_name: fullName,
+      email,
+      whatsapp_number: whatsappNumber,
+      title: title || null,
+      role: 'OWNER',
+    },
+    { onConflict: 'id' }
+  );
+
+  const supabase = await createClient();
+  const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
+  if (loginError) return { success: false, error: loginError.message };
+
+  revalidatePath('/', 'layout');
+  return { success: true, redirectUrl: '/dashboard' };
+}
+
+export async function inviteTeamMember(input: {
+  fullName: string;
+  email: string;
+  whatsappNumber: string;
+  title: string;
+  role: 'OWNER' | 'TEAM';
+  password?: string;
+}): Promise<InviteResult> {
+  const parsed = inviteSchema.safeParse(input);
+  if (!parsed.success) {
+    return { success: false, error: parsed.error.issues[0]?.message ?? 'Data tidak valid' };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { success: false, error: 'Sesi berakhir. Silakan masuk kembali.' };
+
+  const { data: me } = await supabase.from('profiles').select('role').eq('id', user.id).maybeSingle();
+  if (!me || me.role !== 'OWNER') {
+    return { success: false, error: 'Hanya Owner yang dapat mengundang anggota.' };
+  }
+
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return { success: false, error: 'SUPABASE_SERVICE_ROLE_KEY belum diset di server.' };
+  }
+
+  const { fullName, email, whatsappNumber, title, role } = parsed.data;
+  const tempPassword = parsed.data.password || `Ptn${Math.floor(100000 + Math.random() * 900000)}!`;
+
   const admin = createAdminClient();
-  const { error: profileError } = await admin
-    .from('profiles')
-    .upsert(
-      {
-        id: authData.user.id,
-        full_name: formData.fullName.trim(),
-        email: formData.email.trim(),
-        whatsapp_number: formData.whatsappNumber.trim(),
-        division_id: formData.divisionId.trim(),
-        role: 'STAFF',
-        account_status: 'PENDING',
-      },
-      { onConflict: 'id' }
-    );
+  const { data: created, error } = await admin.auth.admin.createUser({
+    email,
+    password: tempPassword,
+    email_confirm: true,
+    user_metadata: { full_name: fullName, whatsapp_number: whatsappNumber, title, role },
+  });
 
-  if (profileError) {
-    console.warn('[RegisterEngine] Profile upsert notice:', profileError.message);
+  if (error || !created.user) {
+    const msg = error?.message ?? 'Gagal membuat akun.';
+    return { success: false, error: /already|registered|exists/i.test(msg) ? 'Email sudah terdaftar.' : msg };
   }
 
-  return {
-    success: true,
-    message: 'Pendaftaran berhasil! Akun Anda sedang menunggu persetujuan (ACC) dari jajaran Owner.',
-  };
+  await admin.from('profiles').upsert(
+    { id: created.user.id, full_name: fullName, email, whatsapp_number: whatsappNumber, title, role },
+    { onConflict: 'id' }
+  );
+
+  return { success: true, tempPassword };
 }
 
-/**
- * 3. approveUserAccount Server Action (Hak Prerogatif Owner)
- * - Menyetujui (ACC) atau menolak pendaftaran akun tim baru
- * - Menetapkan peran jabatan (STAFF atau MANAGER)
- */
-export async function approveUserAccount(
-  userId: string,
-  assignedRole: 'STAFF' | 'MANAGER',
-  decision: 'ACTIVE' | 'REJECTED'
-) {
-  const supabase: any = await createClient();
-
-  // 1. Verifikasi bahwa eksekutor adalah OWNER
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) {
-    return { success: false, error: 'Sesi kedaluwarsa. Silakan login kembali.' };
-  }
-
-  const { data: executorProfile } = await supabase
-    .from('profiles')
-    .select('role')
-    .eq('id', user.id)
-    .single();
-
-  if (executorProfile?.role !== 'OWNER') {
-    return {
-      success: false,
-      error: 'Hanya jajaran Owner yang berhak menyetujui akun pendaftaran tim baru.',
-    };
-  }
-
-  // 2. Mutasi account_status dan role
-  const { error: updateError } = await supabase
-    .from('profiles')
-    .update({
-      account_status: decision,
-      role: decision === 'ACTIVE' ? assignedRole : 'STAFF',
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', userId);
-
-  if (updateError) {
-    return {
-      success: false,
-      error: updateError.message || 'Gagal memperbarui status akun.',
-    };
-  }
-
-  revalidatePath('/dashboard/owner');
-  revalidatePath('/dashboard/team');
-
-  return {
-    success: true,
-    message: decision === 'ACTIVE'
-      ? `Akun berhasil disetujui (ACC) dengan role ${assignedRole}.`
-      : 'Pendaftaran akun telah ditolak.',
-  };
-}
-
-/**
- * 4. logoutUser Server Action
- * - Mengakhiri sesi pengguna
- */
 export async function logoutUser() {
-  const supabase: any = await createClient();
+  const supabase = await createClient();
   await supabase.auth.signOut();
   redirect('/login');
 }

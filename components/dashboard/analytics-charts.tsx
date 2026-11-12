@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import { motion } from 'framer-motion';
 import {
   BarChart,
   Bar,
@@ -9,243 +10,239 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  ComposedChart,
-  Area,
-  Line,
   Legend,
 } from 'recharts';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { BarChart3, TrendingUp, Target } from 'lucide-react';
-import {
-  MONTHLY_TARGET_VS_ACTUAL_KPI,
-  PTN_DIVISIONS,
-} from '@/lib/operational-data';
+import { BarChart3, TrendingUp, Sparkles, CheckCircle2 } from 'lucide-react';
+import type { CalendarTask, KpiJobdesk, Profile } from '@/types/database';
+import { computeOwnerPerformance, firstName } from '@/lib/performance';
+import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState } from './empty-state';
 
-export interface DivisionPerformance {
-  name: string;
-  target?: number;
-  aktual?: number;
-  selesai: number;
-  aktif: number;
-  terlambat: number;
+export interface AnalyticsChartsProps {
+  profiles: Profile[];
+  tasks: CalendarTask[];
+  jobdesks: KpiJobdesk[];
+  loading?: boolean;
+  onGoToCalendar?: () => void;
 }
 
-export interface KpiPerformance {
-  name: string;
-  fullName: string;
-  target?: number;
-  skor: number;
-  selesai: number;
-}
+export function AnalyticsCharts({
+  profiles,
+  tasks,
+  jobdesks,
+  loading = false,
+  onGoToCalendar,
+}: AnalyticsChartsProps) {
+  if (loading) {
+    return <AnalyticsChartsSkeleton />;
+  }
 
-interface AnalyticsChartsProps {
-  divisionData?: DivisionPerformance[];
-  kpiData?: KpiPerformance[];
-}
+  const now = new Date();
+  const ownerPerformances = profiles.map((p) => computeOwnerPerformance(p, tasks, jobdesks, now));
 
-const DEFAULT_DIVISION_TARGET_ACTUAL = PTN_DIVISIONS.map((div) => ({
-  name: div.name === 'Project Management' ? 'PM' : div.name,
-  fullName: div.name,
-  target: div.targetKpi,
-  aktual: div.actualKpi,
-  selesai: div.completedTasksCount,
-  aktif: div.activeTasksCount,
-  terlambat: 0,
-}));
+  // 1. Data Tugas per Owner (Selesai vs Berjalan vs Terlambat)
+  const taskChartData = ownerPerformances.map((perf) => ({
+    name: firstName(perf.profile.full_name),
+    fullName: perf.profile.full_name,
+    Selesai: perf.completedTasks,
+    Berjalan: perf.openTasks - perf.overdueTasks > 0 ? perf.openTasks - perf.overdueTasks : 0,
+    Terlambat: perf.overdueTasks,
+    total: perf.totalTasks,
+  }));
 
-function CustomTooltip({ active, payload, label }: any) {
-  if (active && payload && payload.length) {
+  // 2. Data KPI Jobdesk (%) per Owner
+  const kpiChartData = ownerPerformances.map((perf) => ({
+    name: firstName(perf.profile.full_name),
+    fullName: perf.profile.full_name,
+    kpi: perf.kpiProgress ?? 0,
+    jobdesks: perf.jobdeskTotal,
+  }));
+
+  const hasAnyTasks = tasks.length > 0;
+  const hasAnyJobdesks = jobdesks.length > 0;
+
+  if (!hasAnyTasks && !hasAnyJobdesks) {
     return (
-      <div className="bg-slate-900/95 backdrop-blur-md text-white border border-slate-800 rounded-xl p-3 shadow-xl text-xs space-y-1.5 min-w-[165px]">
-        <p className="font-semibold text-slate-200 border-b border-slate-800 pb-1">{label}</p>
-        {payload.map((entry: any, index: number) => (
-          <div key={`item-${index}`} className="flex items-center justify-between gap-3">
-            <span className="flex items-center gap-1.5 text-slate-300">
-              <span
-                className="w-2 h-2 rounded-full inline-block"
-                style={{ backgroundColor: entry.color }}
-              />
-              {entry.name}:
-            </span>
-            <span className="font-bold text-white">{entry.value}</span>
-          </div>
-        ))}
+      <div className="rounded-xl border border-[#E5E5E5] bg-white p-6 shadow-xs">
+        <EmptyState
+          icon={BarChart3}
+          title="Belum ada data analitik"
+          description="Grafik pencapaian target dan ketepatan waktu akan terbentuk otomatis setelah ada tugas atau jobdesk aktif di sistem."
+          actionLabel="Buat agenda baru"
+          onAction={onGoToCalendar}
+        />
       </div>
     );
   }
-  return null;
-}
-
-export function AnalyticsCharts({ divisionData }: AnalyticsChartsProps) {
-  const activeDivisionChart =
-    divisionData && divisionData.length >= 5 && divisionData.some((d) => d.selesai > 0)
-      ? divisionData.map((d) => ({
-          ...d,
-          target: d.target ?? 100,
-          aktual: d.aktual ?? Math.min(100, 82 + d.selesai * 2),
-        }))
-      : DEFAULT_DIVISION_TARGET_ACTUAL;
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-      {/* 1. GRAFIK UTAMA RECHARTS: TARGET VS AKTUAL KPI BULANAN (7 COLUMNS BENTO) */}
-      <Card className="lg:col-span-7 border border-slate-200/70 bg-white shadow-xs rounded-2xl hover:shadow-md hover:border-slate-300 transition-all duration-200">
-        <CardHeader className="pb-3 border-b border-slate-100">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div className="space-y-1">
-              <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600">
-                  <Target className="w-4 h-4" />
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Chart 1: Status Penyelesaian Tugas per Owner */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25 }}
+          className="rounded-xl border border-[#E5E5E5] bg-white p-5 shadow-xs flex flex-col justify-between"
+        >
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-[#F0F0F0]">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-md bg-[#FAFAFA] border border-[#E5E5E5]">
+                  <BarChart3 className="w-4 h-4 text-[#171717]" strokeWidth={1.5} />
                 </div>
-                Target vs Aktual KPI Bulanan (Internal Update PTN)
-              </CardTitle>
-              <CardDescription className="text-xs text-slate-500">
-                Realisasi pencapaian skor KPI tim inti dibandingkan target bulanan EdTech (Jun - Nov 2026)
-              </CardDescription>
+                <div>
+                  <h3 className="text-sm font-semibold text-[#171717]">Status Tugas per Anggota</h3>
+                  <p className="text-xs text-[#737373]">Perbandingan tugas selesai, aktif, dan terlambat</p>
+                </div>
+              </div>
             </div>
-            <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200/70 px-2.5 py-1 rounded-full self-start sm:self-center">
-              Realisasi Nov: 97.8% dari Target
-            </span>
-          </div>
-        </CardHeader>
-        <CardContent className="pt-5">
-          <div className="h-64 sm:h-72 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart
-                data={MONTHLY_TARGET_VS_ACTUAL_KPI}
-                margin={{ top: 10, right: 12, left: -18, bottom: 0 }}
-              >
-                <defs>
-                  <linearGradient id="gradientAktualKpi" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.28} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                <XAxis
-                  dataKey="month"
-                  stroke="#64748b"
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                />
-                <YAxis
-                  stroke="#64748b"
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                  domain={[50, 105]}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend
-                  verticalAlign="top"
-                  align="right"
-                  iconType="circle"
-                  iconSize={8}
-                  wrapperStyle={{ fontSize: '11px', paddingBottom: '14px' }}
-                />
-                <Bar
-                  name="Target KPI (%)"
-                  dataKey="target"
-                  fill="#cbd5e1"
-                  radius={[6, 6, 0, 0]}
-                  maxBarSize={26}
-                />
-                <Bar
-                  name="Aktual KPI (%)"
-                  dataKey="aktual"
-                  fill="#0f172a"
-                  radius={[6, 6, 0, 0]}
-                  maxBarSize={26}
-                />
-                <Area
-                  type="monotone"
-                  name="Tren Aktual"
-                  dataKey="aktual"
-                  stroke="#10b981"
-                  strokeWidth={2.5}
-                  fill="url(#gradientAktualKpi)"
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          </div>
-        </CardContent>
-      </Card>
 
-      {/* 2. BAR CHART: CAPAIAN KPI LINTAS 9 DIVISI (5 COLUMNS BENTO) */}
-      <Card className="lg:col-span-5 border border-slate-200/70 bg-white shadow-xs rounded-2xl hover:shadow-md hover:border-slate-300 transition-all duration-200">
-        <CardHeader className="pb-3 border-b border-slate-100">
-          <div className="flex items-center justify-between gap-2">
-            <div className="space-y-1">
-              <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <div className="p-1.5 rounded-lg bg-emerald-50 text-emerald-600">
-                  <BarChart3 className="w-4 h-4" />
+            <div className="h-64 mt-4 w-full">
+              {!hasAnyTasks ? (
+                <div className="h-full flex items-center justify-center">
+                  <p className="text-xs text-[#737373]">Belum ada tugas tercatat bulan ini.</p>
                 </div>
-                Capaian 9 Divisi Operasional
-              </CardTitle>
-              <CardDescription className="text-xs text-slate-500">
-                Perbandingan Target vs Aktual per divisi PTN
-              </CardDescription>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={taskChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F0F0F0" />
+                    <XAxis
+                      dataKey="name"
+                      tick={{ fill: '#737373', fontSize: 11 }}
+                      axisLine={{ stroke: '#E5E5E5' }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fill: '#737373', fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                      allowDecimals={false}
+                    />
+                    <Tooltip
+                      cursor={{ fill: '#FAFAFA' }}
+                      contentStyle={{
+                        backgroundColor: '#FFFFFF',
+                        border: '1px solid #E5E5E5',
+                        borderRadius: '8px',
+                        fontSize: '11px',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                      }}
+                      formatter={(val: number) => [`${val} tugas`, '']}
+                      labelFormatter={(label) => `Owner: ${label}`}
+                    />
+                    <Legend
+                      verticalAlign="top"
+                      align="right"
+                      iconType="circle"
+                      iconSize={6}
+                      wrapperStyle={{ fontSize: '11px', paddingBottom: '10px' }}
+                    />
+                    <Bar dataKey="Selesai" fill="#171717" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                    <Bar dataKey="Berjalan" fill="#A3A3A3" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                    <Bar dataKey="Terlambat" fill="#B45309" radius={[4, 4, 0, 0]} maxBarSize={28} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
             </div>
-            <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-full">
-              9 Divisi Aktif
-            </span>
           </div>
-        </CardHeader>
-        <CardContent className="pt-5">
-          <div className="h-64 sm:h-72 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart
-                data={activeDivisionChart}
-                margin={{ top: 10, right: 8, left: -22, bottom: 0 }}
-                barGap={4}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" vertical={false} />
-                <XAxis
-                  dataKey="name"
-                  stroke="#64748b"
-                  fontSize={10}
-                  tickLine={false}
-                  axisLine={false}
-                  interval={0}
-                  angle={-20}
-                  textAnchor="end"
-                  height={42}
-                />
-                <YAxis
-                  stroke="#64748b"
-                  fontSize={11}
-                  tickLine={false}
-                  axisLine={false}
-                  domain={[0, 110]}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend
-                  verticalAlign="top"
-                  align="right"
-                  iconType="circle"
-                  iconSize={8}
-                  wrapperStyle={{ fontSize: '11px', paddingBottom: '12px' }}
-                />
-                <Bar
-                  name="Target"
-                  dataKey="target"
-                  fill="#e2e8f0"
-                  radius={[4, 4, 0, 0]}
-                  maxBarSize={14}
-                />
-                <Bar
-                  name="Aktual (%)"
-                  dataKey="aktual"
-                  fill="#10b981"
-                  radius={[4, 4, 0, 0]}
-                  maxBarSize={14}
-                />
-              </BarChart>
-            </ResponsiveContainer>
+
+          <div className="pt-3 border-t border-[#F0F0F0] flex items-center justify-between text-[11px] text-[#737373]">
+            <span>Metrik murni Supabase</span>
+            <span className="font-medium text-[#171717]">Total {tasks.length} Tugas Terdaftar</span>
           </div>
-        </CardContent>
-      </Card>
+        </motion.div>
+
+        {/* Chart 2: Capaian Bobot KPI Jobdesk per Owner */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.25, delay: 0.05 }}
+          className="rounded-xl border border-[#E5E5E5] bg-white p-5 shadow-xs flex flex-col justify-between"
+        >
+          <div>
+            <div className="flex items-center justify-between pb-3 border-b border-[#F0F0F0]">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-md bg-[#FAFAFA] border border-[#E5E5E5]">
+                  <TrendingUp className="w-4 h-4 text-[#171717]" strokeWidth={1.5} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-[#171717]">Pencapaian KPI Jobdesk (%)</h3>
+                  <p className="text-xs text-[#737373]">Dihitung dari bobot jobdesk selesai bulan berjalan</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="h-64 mt-4 w-full">
+              {!hasAnyJobdesks ? (
+                <div className="h-full flex items-center justify-center">
+                  <p className="text-xs text-[#737373]">Belum ada jobdesk tercatat bulan ini.</p>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={kpiChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F0F0F0" />
+                    <XAxis
+                      dataKey="name"
+                      tick={{ fill: '#737373', fontSize: 11 }}
+                      axisLine={{ stroke: '#E5E5E5' }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      domain={[0, 100]}
+                      tick={{ fill: '#737373', fontSize: 11 }}
+                      axisLine={false}
+                      tickLine={false}
+                      tickFormatter={(val) => `${val}%`}
+                    />
+                    <Tooltip
+                      cursor={{ fill: '#FAFAFA' }}
+                      contentStyle={{
+                        backgroundColor: '#FFFFFF',
+                        border: '1px solid #E5E5E5',
+                        borderRadius: '8px',
+                        fontSize: '11px',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                      }}
+                      formatter={(val: number) => [`${val}% KPI`, 'Capaian']}
+                      labelFormatter={(label) => `Owner: ${label}`}
+                    />
+                    <Bar dataKey="kpi" name="Capaian KPI" fill="#171717" radius={[4, 4, 0, 0]} maxBarSize={36} />
+                  </BarChart>
+                </ResponsiveContainer>
+              )}
+            </div>
+          </div>
+
+          <div className="pt-3 border-t border-[#F0F0F0] flex items-center justify-between text-[11px] text-[#737373]">
+            <span>Target bulanan: 100%</span>
+            <span className="font-medium text-[#171717]">Total {jobdesks.length} Jobdesk Terdaftar</span>
+          </div>
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
+function AnalyticsChartsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      {[1, 2].map((i) => (
+        <div key={i} className="rounded-xl border border-[#E5E5E5] bg-white p-5 space-y-4">
+          <div className="flex items-center gap-3 pb-3 border-b border-[#F0F0F0]">
+            <Skeleton className="w-8 h-8 rounded-md" />
+            <div className="space-y-1.5 flex-1">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-3 w-56" />
+            </div>
+          </div>
+          <Skeleton className="h-60 w-full rounded-md" />
+          <div className="pt-3 border-t border-[#F0F0F0] flex justify-between">
+            <Skeleton className="h-3 w-28" />
+            <Skeleton className="h-3 w-32" />
+          </div>
+        </div>
+      ))}
     </div>
   );
 }

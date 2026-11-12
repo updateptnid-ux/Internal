@@ -1,304 +1,213 @@
 'use client';
 
-import * as React from 'react';
-import { useRouter } from 'next/navigation';
+import React, { useState } from 'react';
 import Link from 'next/link';
-import { 
-  Card, 
-  CardHeader, 
-  CardTitle, 
-  CardDescription, 
-  CardContent, 
-  CardFooter 
-} from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Button } from '@/components/ui/button';
-import { createClient } from '@/lib/supabase/client';
-import { getPublicDivisions } from '@/actions/auth';
-import { 
-  Layers, 
-  User, 
-  Mail, 
-  Phone, 
-  Building2, 
-  Lock, 
-  Eye, 
-  EyeOff, 
-  AlertCircle, 
-  CheckCircle2, 
+import { useRouter } from 'next/navigation';
+import { motion } from 'framer-motion';
+import {
+  Mail,
+  Lock,
+  Phone,
+  Briefcase,
   Loader2,
-  ArrowLeft
+  AlertCircle,
+  CheckCircle2,
+  ArrowRight,
+  ShieldCheck,
 } from 'lucide-react';
+import { registerUser } from '@/actions/auth';
 
 export default function RegisterPage() {
   const router = useRouter();
+  const [fullName, setFullName] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [whatsappNumber, setWhatsappNumber] = useState('');
+  const [jobTitle, setJobTitle] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
-  // Form states
-  const [fullName, setFullName] = React.useState('');
-  const [email, setEmail] = React.useState('');
-  const [whatsapp, setWhatsapp] = React.useState('');
-  const [selectedDivisionId, setSelectedDivisionId] = React.useState('');
-  const [password, setPassword] = React.useState('');
-  const [showPassword, setShowPassword] = React.useState(false);
-
-  // Status states
-  const [divisions, setDivisions] = React.useState<Array<{ id: string; name: string }>>([]);
-  const [isLoading, setIsLoading] = React.useState(false);
-  const [isFetchingDivisions, setIsFetchingDivisions] = React.useState(true);
-  const [errorMessage, setErrorMessage] = React.useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
-
-  // 1. Fetch Data Divisi Resmi dari Supabase (UUID Valid)
-  React.useEffect(() => {
-    async function loadDivisions() {
-      try {
-        setIsFetchingDivisions(true);
-        const data = await getPublicDivisions();
-        if (data && data.length > 0) {
-          setDivisions(data);
-          setSelectedDivisionId(data[0].id); // division.id (UUID)
-        }
-      } catch (err: any) {
-        console.error('Failed to load divisions:', err);
-      } finally {
-        setIsFetchingDivisions(false);
-      }
-    }
-    loadDivisions();
-  }, []);
-
-  // 2. Submit Handler dengan Payload Metadata UUID Valid
-  const handleSubmit = async (e: React.FormEvent) => {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrorMessage(null);
     setSuccessMessage(null);
     setIsLoading(true);
 
-    if (!selectedDivisionId) {
-      setErrorMessage('Silakan pilih divisi kerja yang valid.');
-      setIsLoading(false);
-      return;
-    }
-
     try {
-      const supabase = createClient();
-
-      // Panggilan SignUp ke Supabase Auth
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: email.trim(),
-        password: password,
-        options: {
-          data: {
-            full_name: fullName.trim(),
-            whatsapp_number: whatsapp.trim(),
-            division_id: selectedDivisionId.trim(), // INI WAJIB UUID DARI DATABASE
-          },
-        },
+      const result = await registerUser({
+        fullName,
+        email,
+        password,
+        whatsappNumber,
+        title: jobTitle,
       });
 
-      if (authError || !authData.user) {
-        setErrorMessage(authError?.message || 'Pendaftaran gagal. Periksa kembali informasi Anda.');
+      if (!result.success) {
+        setErrorMessage(result.error || 'Pendaftaran gagal. Silakan coba kembali.');
         setIsLoading(false);
         return;
       }
 
-      setSuccessMessage('Pendaftaran berhasil! Akun Anda sedang menunggu persetujuan (ACC) dari Owner.');
-      setIsLoading(false);
-
-      // Arahkan ke halaman login setelah 2.5 detik
+      setSuccessMessage('Pendaftaran berhasil! Akun langsung aktif (Auto-Confirm). Membuka dashboard...');
       setTimeout(() => {
-        router.push('/login');
-      }, 2500);
+        router.push(result.redirectUrl || '/dashboard');
+        router.refresh();
+      }, 1200);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Terjadi kesalahan sistem saat memproses registrasi.');
+      setErrorMessage(err.message || 'Terjadi gangguan sistem.');
       setIsLoading(false);
     }
-  };
+  }
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-slate-50/70 p-4 font-sans">
-      <div className="w-full max-w-md space-y-4">
-        {/* BRAND LOGO */}
-        <div className="flex flex-col items-center justify-center text-center space-y-2">
-          <div className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold shadow-sm">
-            <Layers className="w-5 h-5 text-emerald-400" />
+    <div className="min-h-screen bg-[#FAFAFA] flex flex-col justify-center items-center p-4">
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25 }}
+        className="w-full max-w-md"
+      >
+        {/* Brand Header */}
+        <div className="text-center mb-6">
+          <div className="w-10 h-10 rounded-xl bg-[#171717] text-white flex items-center justify-center font-bold text-base mx-auto mb-3 shadow-xs">
+            PTN
           </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900">
-              Internal Workspace
-            </h1>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Pendaftaran Anggota Tim Baru
+          <h1 className="text-lg font-semibold text-[#171717] tracking-tight">
+            Daftar Akun Baru (Frictionless)
+          </h1>
+          <p className="text-xs text-[#737373] mt-1 flex items-center justify-center gap-1">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+            Tanpa perlu menunggu konfirmasi email — langsung aktif
+          </p>
+        </div>
+
+        {/* Card Form */}
+        <div className="bg-white border border-[#E5E5E5] rounded-xl p-6 shadow-xs">
+          <form onSubmit={handleSubmit} className="space-y-3.5">
+            {errorMessage && (
+              <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{errorMessage}</span>
+              </div>
+            )}
+
+            {successMessage && (
+              <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{successMessage}</span>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-medium text-[#171717] mb-1">
+                Nama Lengkap
+              </label>
+              <input
+                type="text"
+                required
+                value={fullName}
+                onChange={(e) => setFullName(e.target.value)}
+                placeholder="Contoh: Arya Pusat / Zidan Nabil"
+                className="w-full text-xs px-3 py-2 border border-[#E5E5E5] rounded-md focus:outline-none focus:border-[#171717] transition-colors bg-white text-[#171717]"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-[#171717] mb-1 flex items-center gap-1">
+                  <Mail className="w-3.5 h-3.5 text-[#737373]" />
+                  Email
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="nama@internalptn.id"
+                  className="w-full text-xs px-3 py-2 border border-[#E5E5E5] rounded-md focus:outline-none focus:border-[#171717] transition-colors bg-white text-[#171717]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-[#171717] mb-1 flex items-center gap-1">
+                  <Phone className="w-3.5 h-3.5 text-[#737373]" />
+                  Nomor WhatsApp
+                </label>
+                <input
+                  type="tel"
+                  required
+                  value={whatsappNumber}
+                  onChange={(e) => setWhatsappNumber(e.target.value)}
+                  placeholder="+62 8xx-xxxx-xxxx"
+                  className="w-full text-xs px-3 py-2 border border-[#E5E5E5] rounded-md focus:outline-none focus:border-[#171717] transition-colors bg-white text-[#171717]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[#171717] mb-1 flex items-center gap-1">
+                <Briefcase className="w-3.5 h-3.5 text-[#737373]" />
+                Jabatan / Jobdesk Utama
+              </label>
+              <input
+                type="text"
+                value={jobTitle}
+                onChange={(e) => setJobTitle(e.target.value)}
+                placeholder="Contoh: Project Manager / IT Lead / Marketing"
+                className="w-full text-xs px-3 py-2 border border-[#E5E5E5] rounded-md focus:outline-none focus:border-[#171717] transition-colors bg-white text-[#171717]"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[#171717] mb-1 flex items-center gap-1">
+                <Lock className="w-3.5 h-3.5 text-[#737373]" />
+                Password (Minimal 6 karakter)
+              </label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full text-xs px-3 py-2 border border-[#E5E5E5] rounded-md focus:outline-none focus:border-[#171717] transition-colors bg-white font-mono text-[#171717]"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="w-full mt-2 py-2.5 px-4 bg-[#171717] hover:bg-[#262626] text-white text-xs font-medium rounded-md transition-colors flex items-center justify-center gap-2 disabled:opacity-60"
+            >
+              {isLoading ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Mendaftarkan Akun...
+                </>
+              ) : (
+                <>
+                  Daftar & Masuk Langsung
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </>
+              )}
+            </button>
+          </form>
+
+          {/* Login Link */}
+          <div className="mt-5 pt-4 border-t border-[#E5E5E5] text-center">
+            <p className="text-xs text-[#737373]">
+              Sudah memiliki akun?{' '}
+              <Link
+                href="/login"
+                className="text-[#171717] font-medium hover:underline"
+              >
+                Masuk di sini
+              </Link>
             </p>
           </div>
         </div>
-
-        {/* REGISTRATION CARD */}
-        <Card className="border border-slate-200/70 bg-white shadow-xs rounded-2xl">
-          <CardHeader className="pb-3 border-b border-slate-100">
-            <CardTitle className="text-sm font-semibold text-slate-900">
-              Formulir Pendaftaran
-            </CardTitle>
-            <CardDescription className="text-xs text-slate-500">
-              Lengkapi data diri Anda. Akun akan melalui proses verifikasi dan ACC oleh Owner.
-            </CardDescription>
-          </CardHeader>
-
-          <form onSubmit={handleSubmit}>
-            <CardContent className="space-y-3.5 pt-4">
-              {errorMessage && (
-                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  <span className="leading-relaxed">{errorMessage}</span>
-                </div>
-              )}
-
-              {successMessage && (
-                <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-start gap-2.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-                  <span className="leading-relaxed">{successMessage}</span>
-                </div>
-              )}
-
-              {/* NAMA LENGKAP */}
-              <div className="space-y-1">
-                <Label htmlFor="reg-name" className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-                  <User className="w-3.5 h-3.5 text-slate-500" />
-                  Nama Lengkap
-                </Label>
-                <Input
-                  id="reg-name"
-                  type="text"
-                  value={fullName}
-                  onChange={(e) => setFullName(e.target.value)}
-                  placeholder="Contoh: Budi Santoso"
-                  required
-                  disabled={isLoading}
-                  className="text-xs rounded-xl"
-                />
-              </div>
-
-              {/* EMAIL */}
-              <div className="space-y-1">
-                <Label htmlFor="reg-email" className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-                  <Mail className="w-3.5 h-3.5 text-slate-500" />
-                  Email Perusahaan
-                </Label>
-                <Input
-                  id="reg-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="nama@perusahaan.com"
-                  required
-                  disabled={isLoading}
-                  className="text-xs rounded-xl"
-                />
-              </div>
-
-              {/* WHATSAPP */}
-              <div className="space-y-1">
-                <Label htmlFor="reg-whatsapp" className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-                  <Phone className="w-3.5 h-3.5 text-slate-500" />
-                  Nomor WhatsApp Aktif
-                </Label>
-                <Input
-                  id="reg-whatsapp"
-                  type="tel"
-                  value={whatsapp}
-                  onChange={(e) => setWhatsapp(e.target.value)}
-                  placeholder="081234567890"
-                  required
-                  disabled={isLoading}
-                  className="text-xs rounded-xl"
-                />
-              </div>
-
-              {/* DIVISI */}
-              <div className="space-y-1">
-                <Label htmlFor="reg-division" className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-                  <Building2 className="w-3.5 h-3.5 text-slate-500" />
-                  Pilihan Divisi Kerja
-                </Label>
-                <select
-                  id="reg-division"
-                  value={selectedDivisionId}
-                  onChange={(e) => setSelectedDivisionId(e.target.value)}
-                  required
-                  disabled={isLoading || isFetchingDivisions}
-                  className="flex h-9 w-full rounded-xl border border-slate-200 bg-white px-3 py-1 text-xs shadow-2xs focus:outline-hidden focus:ring-1 focus:ring-slate-900"
-                >
-                  {isFetchingDivisions ? (
-                    <option value="" disabled>Memuat daftar divisi...</option>
-                  ) : (
-                    divisions.map((div) => (
-                      <option key={div.id} value={div.id}>
-                        {div.name}
-                      </option>
-                    ))
-                  )}
-                </select>
-              </div>
-
-              {/* PASSWORD */}
-              <div className="space-y-1">
-                <Label htmlFor="reg-password" className="flex items-center gap-1.5 text-xs font-semibold text-slate-700">
-                  <Lock className="w-3.5 h-3.5 text-slate-500" />
-                  Kata Sandi (Minimal 6 Karakter)
-                </Label>
-                <div className="relative">
-                  <Input
-                    id="reg-password"
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="••••••••••••"
-                    required
-                    disabled={isLoading}
-                    className="text-xs pr-10 rounded-xl"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    tabIndex={-1}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 focus:outline-hidden"
-                  >
-                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-              </div>
-            </CardContent>
-
-            <CardFooter className="flex flex-col gap-3 pt-3">
-              <Button
-                type="submit"
-                disabled={isLoading || isFetchingDivisions}
-                className="w-full h-10 text-xs font-semibold gap-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl shadow-xs transition-all hover:shadow-md cursor-pointer"
-              >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-white" />
-                    Mendaftarkan Akun...
-                  </>
-                ) : (
-                  'Daftar Sekarang'
-                )}
-              </Button>
-
-              <div className="text-center pt-1">
-                <Link
-                  href="/login"
-                  className="text-xs text-slate-500 hover:text-slate-900 font-medium inline-flex items-center gap-1 transition-colors"
-                >
-                  <ArrowLeft className="w-3 h-3" />
-                  Sudah punya akun? Masuk di sini
-                </Link>
-              </div>
-            </CardFooter>
-          </form>
-        </Card>
-      </div>
+      </motion.div>
     </div>
   );
 }
