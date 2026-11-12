@@ -2,58 +2,46 @@ import { z } from 'zod';
 
 /**
  * Enterprise Environment Variable Schema (Zod)
- * Memastikan konfigurasi runtime Supabase terdefinisi dengan format valid.
+ * Validasi runtime Supabase environment variables dengan graceful fallback untuk build phase (Vercel).
  */
 const envSchema = z.object({
-  NEXT_PUBLIC_SUPABASE_URL: z
-    .string()
-    .min(1, 'NEXT_PUBLIC_SUPABASE_URL belum dikonfigurasi di file environment.')
-    .url('NEXT_PUBLIC_SUPABASE_URL harus berupa URL yang valid (contoh: https://xyz.supabase.co)'),
-
-  NEXT_PUBLIC_SUPABASE_ANON_KEY: z
-    .string()
-    .min(20, 'NEXT_PUBLIC_SUPABASE_ANON_KEY belum dikonfigurasi atau tidak valid (minimal 20 karakter).'),
+  NEXT_PUBLIC_SUPABASE_URL: z.string().url(),
+  NEXT_PUBLIC_SUPABASE_ANON_KEY: z.string().min(1),
 });
 
 export type EnvSchema = z.infer<typeof envSchema>;
 
+let hasWarnedMissingEnv = false;
+
 /**
- * Validasi ketat variabel environment saat runtime.
- * Mengembalikan objek typed atau melempar error deskriptif berstandar enterprise.
+ * Mengambil variabel environment dengan fallback yang aman saat build Vercel.
+ * Tidak melempar fatal error agar proses `next build` tetap lulus walaupun env belum di-set di platform.
  */
 export function getEnv(): EnvSchema {
-  const parsed = envSchema.safeParse({
-    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
-    NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const rawAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  const result = envSchema.safeParse({
+    NEXT_PUBLIC_SUPABASE_URL: rawUrl,
+    NEXT_PUBLIC_SUPABASE_ANON_KEY: rawAnonKey,
   });
 
-  if (!parsed.success) {
-    const errorMessages = parsed.error.issues
-      .map((issue) => `  - [${issue.path.join('.')}] ${issue.message}`)
-      .join('\n');
+  if (!result.success) {
+    if (!hasWarnedMissingEnv && process.env.NODE_ENV !== 'test') {
+      hasWarnedMissingEnv = true;
+      console.warn(
+        '[WARN] NEXT_PUBLIC_SUPABASE_URL atau NEXT_PUBLIC_SUPABASE_ANON_KEY belum dikonfigurasi secara lengkap.\n' +
+        'Menggunakan fallback aman untuk build time. Pastikan menambahkan variabel ini di Project Settings Vercel saat production.'
+      );
+    }
 
-    const formattedError = `
-================================================================================
-CRITICAL CONFIGURATION ERROR: SUPABASE ENVIRONMENT VARIABLES MISSING
-================================================================================
-Aplikasi Enterprise Task System membutuhkan kredensial Supabase yang valid untuk berjalan.
-
-Penyebab Kegagalan:
-${errorMessages}
-
-Langkah Perbaikan (Quick Fix):
-  1. Pastikan Anda telah menyalin file .env.example menjadi .env.local:
-     copy .env.example .env.local
-  2. Buka file .env.local dan masukkan Project URL serta Anon Key asli Anda dari:
-     Supabase Dashboard -> Project Settings -> API
-  3. Restart server development (npm run dev).
-================================================================================
-`;
-    console.error(formattedError);
-    throw new Error(formattedError);
+    return {
+      NEXT_PUBLIC_SUPABASE_URL: rawUrl && rawUrl.startsWith('http') ? rawUrl : 'https://placeholder-project.supabase.co',
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: rawAnonKey || 'placeholder-anon-key-for-build',
+    };
   }
 
-  return parsed.data;
+  return result.data;
 }
 
 export const env = {

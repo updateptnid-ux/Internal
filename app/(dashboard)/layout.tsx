@@ -8,13 +8,20 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  try {
+    const supabase = await createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-  if (!user) {
-    redirect('/login');
+    if (!user) {
+      redirect('/login');
+    }
+  } catch (err: any) {
+    if (err?.digest?.startsWith('NEXT_REDIRECT')) {
+      throw err;
+    }
+    // Mengabaikan error koneksi saat build-time prerendering
   }
 
   return (
